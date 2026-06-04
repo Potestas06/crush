@@ -1294,7 +1294,28 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return nil
 	}
 
+	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
+	var summaryMessageBudget int64
+	if cw := int64(largeModel.CatwalkCfg.ContextWindow); cw > 0 {
+		prepared := prepareMessagesForSummarization(
+			msgs,
+			cw,
+			largeModel.CatwalkCfg.DefaultMaxTokens,
+			string(summaryPrompt),
+			systemPromptPrefix,
+			summaryPromptText,
+		)
+		if !prepared.OK {
+			return a.saveLocalFallbackSummary(ctx, currentSession, largeModel, localFallbackSummary(msgs, prepared.Reason))
+		}
+		msgs = prepared.Messages
+		summaryMessageBudget = prepared.Budget
+	}
+
 	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages)
+	if summaryMessageBudget > 0 && estimateMessageTokens(aiMsgs) > summaryMessageBudget {
+		return a.saveLocalFallbackSummary(ctx, currentSession, largeModel, localFallbackSummary(msgs, "prepared messages exceed summarization budget after prompt conversion"))
+	}
 
 	genCtx, cancel := context.WithCancel(ctx)
 	a.activeRequests.Set(sessionID, cancel)
@@ -1320,8 +1341,6 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if err != nil {
 		return err
 	}
-
-	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
 
 	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:          summaryPromptText,
@@ -1400,20 +1419,9 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return err
 	}
 
-	// Release the active request before processing queued messages so that
-	// Run() does not see the session as busy.
-	a.activeRequests.Del(sessionID)
-	cancel()
-
-	// Process any messages that were queued while summarizing.
-	queuedMessages, ok := a.messageQueue.Get(sessionID)
-	if !ok || len(queuedMessages) == 0 {
-		return nil
-	}
-	firstQueuedMessage := queuedMessages[0]
-	a.messageQueue.Set(sessionID, queuedMessages[1:])
-	_, qErr := a.Run(ctx, firstQueuedMessage)
-	return qErr
+	// Stop after compaction. The summary is a passive snapshot, and the
+	// next assistant turn must be triggered by a new user instruction.
+	return nil
 }
 
 func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
@@ -1626,6 +1634,16 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 		if summaryMsgIndex != -1 {
 			msgs = msgs[summaryMsgIndex:]
 			msgs[0].Role = message.User
+			text := strings.TrimSpace(msgs[0].Content().Text)
+			if text != "" && !strings.Contains(text, summarySnapshotNotice) {
+				for i, part := range msgs[0].Parts {
+					if content, ok := part.(message.TextContent); ok {
+						content.Text = summarySnapshotNotice + "\n\n" + content.Text
+						msgs[0].Parts[i] = content
+						break
+					}
+				}
+			}
 		}
 	}
 	return msgs, nil
@@ -1811,6 +1829,31 @@ func updateSessionTokenCounters(session *session.Session, usage fantasy.Usage) {
 	if promptTokens := usage.InputTokens + usage.CacheReadTokens; promptTokens != 0 {
 		session.PromptTokens = promptTokens
 	}
+}
+
+func (a *sessionAgent) saveLocalFallbackSummary(ctx context.Context, currentSession session.Session, largeModel Model, text string) error {
+	summaryMessage, err := a.messages.Create(ctx, currentSession.ID, message.CreateMessageParams{
+		Role:             message.Assistant,
+		Model:            largeModel.ModelCfg.Model,
+		Provider:         largeModel.ModelCfg.Provider,
+		IsSummaryMessage: true,
+		Parts: []message.ContentPart{
+			message.TextContent{Text: text},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")
+	if err := a.messages.Update(ctx, summaryMessage); err != nil {
+		return err
+	}
+	currentSession.SummaryMessageID = summaryMessage.ID
+	currentSession.CompletionTokens = summaryCompletionTokens(fantasy.Usage{}, summaryMessage)
+	currentSession.PromptTokens = 0
+	currentSession.EstimatedUsage = true
+	_, err = a.sessions.Save(ctx, currentSession)
+	return err
 }
 
 func summaryCompletionTokens(usage fantasy.Usage, summaryMessage message.Message) int64 {
@@ -2091,7 +2134,8 @@ func (a *sessionAgent) workaroundProviderMediaLimitations(messages []fantasy.Mes
 // buildSummaryPrompt constructs the prompt text for session summarization.
 func buildSummaryPrompt(todos []session.Todo) string {
 	var sb strings.Builder
-	sb.WriteString("Provide a detailed summary of our conversation above.")
+	sb.WriteString(summarySnapshotNotice)
+	sb.WriteString("\n\nProvide a detailed, passive summary of the conversation above as session state only. Do not phrase the summary as an instruction to execute now.")
 	if len(todos) > 0 {
 		sb.WriteString("\n\n## Current Todo List\n\n")
 		for _, t := range todos {
