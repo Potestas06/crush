@@ -179,7 +179,9 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 		tools.NewWriteTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir),
 	}
 
-	return testSessionAgent(env, large, small, systemPrompt, allTools...), nil
+	agent := testSessionAgent(env, large, small, systemPrompt, allTools...)
+	agent.(*sessionAgent).tools.SetSlice(allTools)
+	return agent, nil
 }
 
 // createSimpleGoProject creates a simple Go project structure in the given directory.

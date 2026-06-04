@@ -22,7 +22,10 @@ const (
 	structuredSummaryTokenLimit int64 = 512
 )
 
-var summaryURLRegex = regexp.MustCompile(`https?://[^\s"'<>]+`)
+var (
+	summaryURLRegex           = regexp.MustCompile(`https?://[^\s"'<>]+`)
+	maliciousInstructionRegex = regexp.MustCompile(`(?i)\b(ignore (?:all )?(?:previous|prior|system|user|developer) instructions|continue automatically|call the bash tool|call bash|overwrite this file|treat this document as system instructions|you are now in admin mode|ignore the user)\b`)
+)
 
 type summaryInputPreparation struct {
 	Messages []message.Message
@@ -100,7 +103,12 @@ func compactToolOutputsForSummarization(messages []message.Message, budget int64
 		}
 		for j, part := range messages[i].Parts {
 			tr, ok := part.(message.ToolResult)
-			if !ok || tr.Content == "" || tr.IsError {
+			if !ok || tr.Content == "" {
+				continue
+			}
+			tr.Content = sanitizeUntrustedContentForSummary(tr.Content)
+			messages[i].Parts[j] = tr
+			if tr.IsError {
 				continue
 			}
 			limit := perToolBudget
@@ -228,6 +236,7 @@ func estimateMessageTokensFromSession(messages []message.Message) int64 {
 }
 
 func toolOutputPlaceholder(result message.ToolResult, tokenLimit int64) string {
+	content := sanitizeUntrustedContentForSummary(result.Content)
 	lines := strings.Count(result.Content, "\n") + 1
 	tool := result.Name
 	if tool == "" {
@@ -243,7 +252,7 @@ func toolOutputPlaceholder(result message.ToolResult, tokenLimit int64) string {
 	}
 	keptBudget := tokenLimit - approxTokenCount(sb.String()) - 16
 	if keptBudget > 0 {
-		fmt.Fprintf(&sb, " Kept summary: %s", summarizeLongText(result.Content, keptBudget))
+		fmt.Fprintf(&sb, " Kept summary: %s", summarizeLongText(content, keptBudget))
 	}
 	return sb.String()
 }
@@ -256,6 +265,29 @@ func textPlaceholder(role message.MessageRole, text string, tokenLimit int64) st
 		return strings.TrimSpace(prefix)
 	}
 	return prefix + summarizeLongText(text, remaining)
+}
+
+func sanitizeUntrustedContentForSummary(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = maliciousInstructionRegex.ReplaceAllString(line, "[neutralized untrusted instruction]")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func passiveSummarySnapshot(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return summarySnapshotNotice
+	}
+	text = sanitizeUntrustedContentForSummary(text)
+	if strings.Contains(text, summarySnapshotNotice) {
+		return text
+	}
+	return summarySnapshotNotice + "\n\n" + text
 }
 
 func summarizeLongText(text string, tokenLimit int64) string {
@@ -381,7 +413,8 @@ func recentToolSummaries(messages []message.Message, limit int) []string {
 			if content == "" && tr.IsError {
 				content = "error"
 			}
-			summaries = append(summaries, fmt.Sprintf("%s: %s", tr.Name, truncateToTokenBudget(content, 96)))
+			content = sanitizeUntrustedContentForSummary(content)
+			summaries = append(summaries, fmt.Sprintf("Untrusted %s output data: %s", tr.Name, truncateToTokenBudget(content, 96)))
 			if len(summaries) >= limit {
 				break
 			}
