@@ -156,14 +156,15 @@ func trimMessagesForSummarizationBudget(messages []message.Message, budget int64
 	lastUser := lastRoleIndex(messages, message.User)
 	lastAssistant := lastRoleIndex(messages, message.Assistant)
 	keep := make([]bool, len(messages))
+	var keptTokens int64
 	for i := len(messages) - 1; i >= 0; i-- {
-		candidate := append([]message.Message(nil), keptMessages(messages, keep)...)
-		candidate = append(candidate, messages[i])
+		msgTokens := estimateMessageTokensFromSession(messages[i : i+1])
 		mustKeep := i == lastUser || i == lastAssistant
-		if mustKeep || estimateMessageTokensFromSession(candidate) <= budget {
+		if mustKeep || keptTokens+msgTokens <= budget {
 			keep[i] = true
+			keptTokens += msgTokens
 		}
-		if estimateMessageTokensFromSession(keptMessages(messages, keep)) <= budget && i < len(messages)/2 {
+		if keptTokens <= budget && i < len(messages)/2 {
 			break
 		}
 	}
@@ -421,6 +422,15 @@ func recentToolSummaries(messages []message.Message, limit int) []string {
 		}
 	}
 	return summaries
+}
+
+func lastAssistantHadToolCalls(msgs []message.Message) bool {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == message.Assistant {
+			return len(msgs[i].ToolCalls()) > 0
+		}
+	}
+	return false
 }
 
 func fantasyMessagesWithinBudget(messages []message.Message, budget int64, agent *sessionAgent, supportsImages bool) bool {

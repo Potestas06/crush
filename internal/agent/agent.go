@@ -1284,7 +1284,12 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return nil
 	}
 
+	wasInterrupted := lastAssistantHadToolCalls(msgs)
+
 	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
+	if wasInterrupted {
+		summaryPromptText += "\n\nNote: the session was compacted while the agent was mid-task. Make sure the summary clearly states that work was interrupted and the user must re-send their request to continue."
+	}
 	var summaryMessageBudget int64
 	if cw := int64(largeModel.CatwalkCfg.ContextWindow); cw > 0 {
 		prepared := prepareMessagesForSummarization(
@@ -1296,7 +1301,11 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			summaryPromptText,
 		)
 		if !prepared.OK {
-			return a.saveLocalFallbackSummary(ctx, currentSession, largeModel, localFallbackSummary(msgs, prepared.Reason))
+			fallback := localFallbackSummary(msgs, prepared.Reason)
+			if wasInterrupted {
+				fallback += "\n\nThe session was compacted while the agent was mid-task. Please re-send your request to continue."
+			}
+			return a.saveLocalFallbackSummary(ctx, currentSession, largeModel, fallback)
 		}
 		msgs = prepared.Messages
 		summaryMessageBudget = prepared.Budget
@@ -1304,7 +1313,11 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 
 	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages)
 	if summaryMessageBudget > 0 && estimateMessageTokens(aiMsgs) > summaryMessageBudget {
-		return a.saveLocalFallbackSummary(ctx, currentSession, largeModel, localFallbackSummary(msgs, "prepared messages exceed summarization budget after prompt conversion"))
+		fallback := localFallbackSummary(msgs, "prepared messages exceed summarization budget after prompt conversion")
+		if wasInterrupted {
+			fallback += "\n\nThe session was compacted while the agent was mid-task. Please re-send your request to continue."
+		}
+		return a.saveLocalFallbackSummary(ctx, currentSession, largeModel, fallback)
 	}
 
 	genCtx, cancel := context.WithCancel(ctx)
@@ -1632,16 +1645,6 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 		if summaryMsgIndex != -1 {
 			msgs = msgs[summaryMsgIndex:]
 			msgs[0].Role = message.User
-			text := strings.TrimSpace(msgs[0].Content().Text)
-			if text != "" && !strings.Contains(text, summarySnapshotNotice) {
-				for i, part := range msgs[0].Parts {
-					if content, ok := part.(message.TextContent); ok {
-						content.Text = summarySnapshotNotice + "\n\n" + content.Text
-						msgs[0].Parts[i] = content
-						break
-					}
-				}
-			}
 		}
 	}
 	return msgs, nil
