@@ -1,4 +1,4 @@
-# Crush
+# Potestas06 Crush
 
 <p align="center">
     <a href="https://stuff.charm.sh/crush/charm-crush.png"><img width="450" alt="Charm Crush Logo" src="https://github.com/user-attachments/assets/cf8ca3ce-8b02-43f0-9d0f-5a331488da4b" /></a><br />
@@ -7,9 +7,27 @@
 </p>
 
 <p align="center">Your new coding bestie, now available in your favourite terminal.<br />Your tools, your code, and your workflows, wired into your LLM of choice.</p>
-<p align="center">终端里的编程新搭档，<br />无缝接入你的工具、代码与工作流，全面兼容主流 LLM 模型。</p>
+<p align="center">Now with custom tweaks and update to make it more sutabel for Power userers with 80b + models </p>
 
 <p align="center"><img width="800" alt="Crush Demo" src="https://github.com/user-attachments/assets/58280caf-851b-470a-b6f7-d5c4ea8a1968" /></p>
+
+## Potestas06 Roadmap
+
+1. Better error handling for tool calls, because poisoned context is not a feature, it is a crime scene
+2. Smarter compactor that can handle tiny context, huge context, and everything in between without immediately fighting for its life
+3. Overall design cleanup so the project feels less like a weekend hack and more like something that has actually seen daylight
+4. Real agentic workflows with subagents, clean context, and less chaos goblin energy
+5. Plan, Ask, and Autopilot modes, because sometimes you want control and sometimes you just want to press go and pray
+6. Better session handling, including cloud saving with something like Firebase, because losing sessions is very 2023
+7. More polish, more features, fewer cursed moments
+8. And much more, because the roadmap is cooking
+
+Yes, Potestas06 Crush is built with Crush while stealing code from Crush.
+
+Crush building Crush by using Crush code for Potestas06 Crush.
+
+Totally normal. Very sane. Nothing weird going on here.
+
 
 ## Features
 
